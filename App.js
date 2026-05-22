@@ -1,17 +1,16 @@
 /**
- * Mis Finanzas v1.2
+ * Mis Finanzas v1.3
  *
- * Basado en Mi Carrito v3.1 por ALVA
- * Adaptado para gestión de ingresos y gastos personales
+ * Basado en v1.2 por ALVA
  *
- * Cambios v1.2:
- * ✅ CSV descargable con FileSystem + Sharing
- * ✅ Nuevos períodos: Bisemanal, Quincenal
- * ✅ Descripción editable inline (MovementRow con useState local)
- * ✅ Presupuesto en drawer — modal con input, barra de progreso en header
- * ✅ Quitar "Cambiar período" del drawer
- * ✅ Bug fix: budgetModalVisible declarado una sola vez
- * ✅ v1.3: CSV exporta como archivo .csv real (compatible Excel/Sheets) con BOM UTF-8
+ * Cambios v1.3:
+ * ✅ Múltiples presupuestos (hasta 5 listas)
+ * ✅ Cada lista tiene: nombre, color, moneda, período, presupuesto y historial propios
+ * ✅ Selector de lista activa en el header (dropdown)
+ * ✅ Gestión de listas en el drawer (crear, renombrar, eliminar)
+ * ✅ Migración automática desde v1.2 (datos existentes → "Mi presupuesto")
+ * ✅ Botón "Configurar presupuesto" dentro de cada lista
+ * ✅ Historial separado por lista
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -30,12 +29,16 @@ import * as FileSystem from 'expo-file-system';
 // CONSTANTES
 // ─────────────────────────────────────────
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const DRAWER_WIDTH   = Math.min(SCREEN_WIDTH * 0.80, 320);
-const STORAGE_KEY    = 'finanzas_movimientos_v1';
-const HISTORY_KEY    = 'finanzas_history_v1';
-const CURRENCY_KEY   = 'finanzas_currency_v1';
-const PERIOD_KEY     = 'finanzas_period_v1';
-const BUDGET_KEY     = 'finanzas_budget_v1';
+const DRAWER_WIDTH  = Math.min(SCREEN_WIDTH * 0.80, 320);
+const LISTS_KEY     = 'finanzas_lists_v1';
+const ACTIVE_KEY    = 'finanzas_active_list_v1';
+
+// Claves legacy v1.2 para migración
+const LEGACY_MOVEMENTS_KEY = 'finanzas_movimientos_v1';
+const LEGACY_HISTORY_KEY   = 'finanzas_history_v1';
+const LEGACY_CURRENCY_KEY  = 'finanzas_currency_v1';
+const LEGACY_PERIOD_KEY    = 'finanzas_period_v1';
+const LEGACY_BUDGET_KEY    = 'finanzas_budget_v1';
 
 const CURRENCIES = [
   { symbol: '₡', code: 'CRC', label: 'Colón' },
@@ -45,8 +48,18 @@ const CURRENCIES = [
 
 const PERIODS = ['Diario', 'Semanal', 'Bisemanal', 'Quincenal', 'Mensual'];
 
+const LIST_COLORS = [
+  '#4f8ef7', // azul
+  '#4fcf8a', // verde
+  '#e07070', // rojo
+  '#e0b84a', // amarillo
+  '#b07ef7', // violeta
+];
+
+const MAX_LISTS = 5;
+
 // ─────────────────────────────────────────
-// PALETA — Azul-índigo financiero
+// PALETA
 // ─────────────────────────────────────────
 const C = {
   bg:          '#0d1520',
@@ -84,9 +97,9 @@ const fmt = (n, symbol = '₡') => {
 };
 
 const todayStr = () => {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const d   = new Date();
+  const y   = d.getFullYear();
+  const m   = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${day}/${m}/${y}`;
 };
@@ -106,7 +119,6 @@ const isInPeriod = (dateStr, period) => {
     const itemDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
     return itemDay.getTime() === today.getTime();
   }
-
   if (period === 'Semanal') {
     const dayOfWeek = today.getDay();
     const monday = new Date(today);
@@ -116,7 +128,6 @@ const isInPeriod = (dateStr, period) => {
     const itemDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
     return itemDay >= monday && itemDay <= sunday;
   }
-
   if (period === 'Bisemanal') {
     const dayOfWeek = today.getDay();
     const thisMonday = new Date(today);
@@ -128,30 +139,35 @@ const isInPeriod = (dateStr, period) => {
     const itemDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
     return itemDay >= twoWeeksAgo && itemDay <= thisSunday;
   }
-
   if (period === 'Quincenal') {
-    const day = now.getDate();
-    const itemMonth = d.getMonth();
-    const itemYear  = d.getFullYear();
+    const day          = now.getDate();
+    const itemMonth    = d.getMonth();
+    const itemYear     = d.getFullYear();
     const currentMonth = now.getMonth();
     const currentYear  = now.getFullYear();
     if (itemMonth !== currentMonth || itemYear !== currentYear) return false;
-    if (day <= 15) {
-      return d.getDate() >= 1 && d.getDate() <= 15;
-    } else {
-      return d.getDate() >= 16;
-    }
+    if (day <= 15) return d.getDate() >= 1  && d.getDate() <= 15;
+    else           return d.getDate() >= 16;
   }
-
   if (period === 'Mensual') {
     return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
   }
-
   return true;
 };
 
+const createList = ({ name, color, currency, period }) => ({
+  id:        Date.now().toString() + Math.random().toString(36).slice(2),
+  name:      name || 'Mi presupuesto',
+  color:     color || LIST_COLORS[0],
+  currency:  currency || CURRENCIES[0],
+  period:    period  || 'Mensual',
+  budget:    0,
+  movements: [],
+  history:   [],
+});
+
 // ─────────────────────────────────────────
-// HELPERS DE STORAGE
+// STORAGE HELPERS
 // ─────────────────────────────────────────
 const load = async (key, fallback) => {
   try {
@@ -185,7 +201,7 @@ export default function App() {
           <Text style={s.splashSubtitle}>Tu balance personal inteligente</Text>
         </View>
         <View style={s.splashFooter}>
-          <Text style={s.splashVersion}>v1.2</Text>
+          <Text style={s.splashVersion}>v1.3</Text>
           <Text style={s.splashCredits}>Desarrollado por ALVA</Text>
         </View>
       </View>
@@ -234,7 +250,7 @@ function MovementRow({ item, onDelete, onUpdateField, onFocusInput, onBlurInput,
               }}
               onChangeText={v => setLocalAmount(v)}
               onBlur={() => {
-                const n = parseFloat(localAmount);
+                const n     = parseFloat(localAmount);
                 const final = (!n || n <= 0) ? item.amount : n;
                 setLocalAmount(String(final));
                 onUpdateField(item.id, 'amount', final);
@@ -263,37 +279,23 @@ function MovementRow({ item, onDelete, onUpdateField, onFocusInput, onBlurInput,
 function AppInner() {
   const insets = useSafeAreaInsets();
 
-  // ── Movimientos ──
-  const [movements,    setMovements]    = useState([]);
+  // ── Listas ──
+  const [lists,          setLists]          = useState([]);
+  const [activeListId,   setActiveListId]   = useState(null);
+
+  // ── Formulario ──
   const [description,  setDescription]  = useState('');
   const [amount,       setAmount]       = useState('');
   const [moveType,     setMoveType]     = useState('income');
   const [dateInput,    setDateInput]    = useState(todayStr());
   const [searchQuery,  setSearchQuery]  = useState('');
-
-  // ── Período y moneda ──
-  const [period,       setPeriod]       = useState('Mensual');
-  const [currency,     setCurrency]     = useState(CURRENCIES[0]);
-
-  // ── Presupuesto ──  (declarado UNA SOLA VEZ — bug fix)
-  const [budget,             setBudget]             = useState(0);
-  const [budgetModalVisible, setBudgetModalVisible] = useState(false);
-  const [budgetInput,        setBudgetInput]        = useState('');
-
-  // ── Historial ──
-  const [history,         setHistory]         = useState([]);
-  const [expandedHistory, setExpandedHistory] = useState(null);
-
-  // ── Toast ──
-  const [toastMsg,     setToastMsg]     = useState('');
-  const [toastVisible, setToastVisible] = useState(false);
-  const toastAnim = useRef(new Animated.Value(0)).current;
-
-  // ── Formulario ──
-  const [formVisible, setFormVisible] = useState(true);
+  const [formVisible,  setFormVisible]  = useState(true);
 
   // ── Modales ──
   const [drawerVisible,        setDrawerVisible]        = useState(false);
+  const [listSelectorVisible,  setListSelectorVisible]  = useState(false);
+  const [budgetModalVisible,   setBudgetModalVisible]   = useState(false);
+  const [budgetInput,          setBudgetInput]          = useState('');
   const [pdfModalVisible,      setPdfModalVisible]      = useState(false);
   const [finalizarVisible,     setFinalizarVisible]     = useState(false);
   const [reuseModalVisible,    setReuseModalVisible]    = useState(false);
@@ -302,6 +304,23 @@ function AppInner() {
   const [clearListModal,       setClearListModal]       = useState(false);
   const [currencyModalVisible, setCurrencyModalVisible] = useState(false);
   const [periodModalVisible,   setPeriodModalVisible]   = useState(false);
+  const [expandedHistory,      setExpandedHistory]      = useState(null);
+
+  // ── Modal nueva/editar lista ──
+  const [newListModal,    setNewListModal]    = useState(false);
+  const [editListModal,   setEditListModal]   = useState(false);
+  const [editingList,     setEditingList]     = useState(null);
+  const [newListName,     setNewListName]     = useState('');
+  const [newListColor,    setNewListColor]    = useState(LIST_COLORS[0]);
+  const [newListCurrency, setNewListCurrency] = useState(CURRENCIES[0]);
+  const [newListPeriod,   setNewListPeriod]   = useState('Mensual');
+  const [deleteListModal, setDeleteListModal] = useState(false);
+  const [listToDelete,    setListToDelete]    = useState(null);
+
+  // ── Toast ──
+  const [toastMsg,     setToastMsg]     = useState('');
+  const [toastVisible, setToastVisible] = useState(false);
+  const toastAnim = useRef(new Animated.Value(0)).current;
 
   // ── Animaciones ──
   const drawerAnim    = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
@@ -310,22 +329,64 @@ function AppInner() {
   const editingRef    = useRef(false);
 
   // ─────────────────────────────────────────
-  // CARGA INICIAL
+  // LISTA ACTIVA (derivada)
+  // ─────────────────────────────────────────
+  const activeList = lists.find(l => l.id === activeListId) || lists[0] || null;
+
+  const updateActiveList = useCallback((updater) => {
+    setLists(prev => {
+      const updated = prev.map(l =>
+        l.id === (activeList?.id) ? { ...l, ...updater(l) } : l
+      );
+      persist(LISTS_KEY, updated);
+      return updated;
+    });
+  }, [activeList]);
+
+  const updateListById = useCallback((id, updater) => {
+    setLists(prev => {
+      const updated = prev.map(l => l.id === id ? { ...l, ...updater(l) } : l);
+      persist(LISTS_KEY, updated);
+      return updated;
+    });
+  }, []);
+
+  // ─────────────────────────────────────────
+  // CARGA INICIAL + MIGRACIÓN
   // ─────────────────────────────────────────
   useEffect(() => {
     (async () => {
-      const [m, h, cur, per, bud] = await Promise.all([
-        load(STORAGE_KEY,  []),
-        load(HISTORY_KEY,  []),
-        load(CURRENCY_KEY, CURRENCIES[0]),
-        load(PERIOD_KEY,   'Mensual'),
-        load(BUDGET_KEY,   0),
-      ]);
-      setMovements(m);
-      setHistory(h);
-      setCurrency(cur);
-      setPeriod(per);
-      setBudget(bud);
+      const savedLists = await load(LISTS_KEY, null);
+      const savedActive = await load(ACTIVE_KEY, null);
+
+      if (savedLists && savedLists.length > 0) {
+        setLists(savedLists);
+        setActiveListId(savedActive || savedLists[0].id);
+        return;
+      }
+
+      // Migración desde v1.2
+      const legacyMovements = await load(LEGACY_MOVEMENTS_KEY, []);
+      const legacyHistory   = await load(LEGACY_HISTORY_KEY,   []);
+      const legacyCurrency  = await load(LEGACY_CURRENCY_KEY,  CURRENCIES[0]);
+      const legacyPeriod    = await load(LEGACY_PERIOD_KEY,    'Mensual');
+      const legacyBudget    = await load(LEGACY_BUDGET_KEY,    0);
+
+      const migratedList = createList({
+        name:     'Mi presupuesto',
+        color:    LIST_COLORS[0],
+        currency: legacyCurrency,
+        period:   legacyPeriod,
+      });
+      migratedList.movements = legacyMovements;
+      migratedList.history   = legacyHistory;
+      migratedList.budget    = legacyBudget;
+
+      const initialLists = [migratedList];
+      setLists(initialLists);
+      setActiveListId(migratedList.id);
+      await persist(LISTS_KEY, initialLists);
+      await persist(ACTIVE_KEY, migratedList.id);
     })();
   }, []);
 
@@ -336,14 +397,6 @@ function AppInner() {
       setFormVisible(true);
     });
     return () => sub.remove();
-  }, []);
-
-  // ─────────────────────────────────────────
-  // GUARDAR MOVIMIENTOS
-  // ─────────────────────────────────────────
-  const saveMovements = useCallback((newItems) => {
-    setMovements(newItems);
-    persist(STORAGE_KEY, newItems);
   }, []);
 
   // ─────────────────────────────────────────
@@ -379,7 +432,7 @@ function AppInner() {
   };
 
   // ─────────────────────────────────────────
-  // MODAL FINALIZAR PERÍODO
+  // MODAL FINALIZAR
   // ─────────────────────────────────────────
   const openFinalizarModal = () => {
     setFinalizarVisible(true);
@@ -395,8 +448,14 @@ function AppInner() {
   };
 
   // ─────────────────────────────────────────
-  // CÁLCULOS
+  // CÁLCULOS (lista activa)
   // ─────────────────────────────────────────
+  const movements    = activeList?.movements || [];
+  const period       = activeList?.period    || 'Mensual';
+  const currency     = activeList?.currency  || CURRENCIES[0];
+  const budget       = activeList?.budget    || 0;
+  const history      = activeList?.history   || [];
+
   const filteredByPeriod = movements.filter(m => isInPeriod(m.date, period));
 
   const totalIngreso = filteredByPeriod
@@ -421,9 +480,10 @@ function AppInner() {
     : filteredByPeriod;
 
   // ─────────────────────────────────────────
-  // CRUD
+  // CRUD MOVIMIENTOS
   // ─────────────────────────────────────────
   const addMovement = () => {
+    if (!activeList) return;
     const desc = description.trim();
     if (!desc) { showToast('Ingresá la descripción del movimiento'); return; }
     const amt = parseFloat(amount);
@@ -436,8 +496,8 @@ function AppInner() {
       type:        moveType,
       date:        dateInput || todayStr(),
     };
-    const newMovements = [newMove, ...movements];
-    saveMovements(newMovements);
+
+    updateActiveList(l => ({ movements: [newMove, ...l.movements] }));
     setDescription('');
     setAmount('');
     setDateInput(todayStr());
@@ -445,10 +505,13 @@ function AppInner() {
     showToast(moveType === 'income' ? 'Ingreso registrado ✓' : 'Gasto registrado ✓');
   };
 
-  const deleteMovement = (id) => saveMovements(movements.filter(m => m.id !== id));
+  const deleteMovement = (id) =>
+    updateActiveList(l => ({ movements: l.movements.filter(m => m.id !== id) }));
 
   const updateMovementField = (id, field, val) =>
-    saveMovements(movements.map(m => m.id === id ? { ...m, [field]: val } : m));
+    updateActiveList(l => ({
+      movements: l.movements.map(m => m.id === id ? { ...m, [field]: val } : m),
+    }));
 
   const clearAll = () => {
     if (!movements.length) { showToast('No hay movimientos registrados'); return; }
@@ -458,18 +521,103 @@ function AppInner() {
   // ─────────────────────────────────────────
   // PRESUPUESTO
   // ─────────────────────────────────────────
-  const saveBudget = async () => {
+  const saveBudget = () => {
     const val = parseFloat(budgetInput.replace(/[^\d.]/g, '')) || 0;
-    setBudget(val);
-    await persist(BUDGET_KEY, val);
+    updateActiveList(() => ({ budget: val }));
     setBudgetModalVisible(false);
     showToast(val > 0 ? `Presupuesto: ${fmt(val, currency.symbol)} ✓` : 'Presupuesto desactivado');
   };
 
   // ─────────────────────────────────────────
+  // PERÍODO Y MONEDA
+  // ─────────────────────────────────────────
+  const selectPeriod = (per) => {
+    updateActiveList(() => ({ period: per }));
+    setPeriodModalVisible(false);
+    showToast(`Período: ${per} ✓`);
+  };
+
+  const selectCurrency = (cur) => {
+    updateActiveList(() => ({ currency: cur }));
+    setCurrencyModalVisible(false);
+    showToast(`Moneda: ${cur.symbol} ${cur.label} ✓`);
+  };
+
+  // ─────────────────────────────────────────
+  // GESTIÓN DE LISTAS
+  // ─────────────────────────────────────────
+  const switchList = async (id) => {
+    setActiveListId(id);
+    await persist(ACTIVE_KEY, id);
+    setListSelectorVisible(false);
+    setSearchQuery('');
+  };
+
+  const openNewListModal = () => {
+    const usedColors = lists.map(l => l.color);
+    const freeColor  = LIST_COLORS.find(c => !usedColors.includes(c)) || LIST_COLORS[lists.length % LIST_COLORS.length];
+    setNewListName('');
+    setNewListColor(freeColor);
+    setNewListCurrency(CURRENCIES[0]);
+    setNewListPeriod('Mensual');
+    setNewListModal(true);
+  };
+
+  const confirmNewList = async () => {
+    const name = newListName.trim();
+    if (!name) { showToast('Ponele un nombre al presupuesto'); return; }
+    if (lists.length >= MAX_LISTS) { showToast(`Máximo ${MAX_LISTS} presupuestos`); return; }
+
+    const newList = createList({
+      name,
+      color:    newListColor,
+      currency: newListCurrency,
+      period:   newListPeriod,
+    });
+    const updated = [...lists, newList];
+    setLists(updated);
+    await persist(LISTS_KEY, updated);
+    setActiveListId(newList.id);
+    await persist(ACTIVE_KEY, newList.id);
+    setNewListModal(false);
+    setListSelectorVisible(false);
+    showToast(`"${name}" creado ✓`);
+  };
+
+  const openEditList = (list) => {
+    setEditingList(list);
+    setNewListName(list.name);
+    setNewListColor(list.color);
+    setEditListModal(true);
+  };
+
+  const confirmEditList = async () => {
+    const name = newListName.trim();
+    if (!name) { showToast('El nombre no puede estar vacío'); return; }
+    updateListById(editingList.id, () => ({ name, color: newListColor }));
+    setEditListModal(false);
+    showToast('Presupuesto actualizado ✓');
+  };
+
+  const confirmDeleteList = async () => {
+    if (!listToDelete) return;
+    const updated = lists.filter(l => l.id !== listToDelete.id);
+    setLists(updated);
+    await persist(LISTS_KEY, updated);
+    if (activeListId === listToDelete.id) {
+      const next = updated[0]?.id || null;
+      setActiveListId(next);
+      await persist(ACTIVE_KEY, next);
+    }
+    setDeleteListModal(false);
+    setListToDelete(null);
+    showToast('Presupuesto eliminado 🗑');
+  };
+
+  // ─────────────────────────────────────────
   // FINALIZAR PERÍODO
   // ─────────────────────────────────────────
-  const finalizarPeriodo = async () => {
+  const finalizarPeriodo = () => {
     if (!filteredByPeriod.length) { showToast('No hay movimientos en el período'); return; }
     openFinalizarModal();
   };
@@ -486,11 +634,11 @@ function AppInner() {
       currency:  currency.symbol,
       movements: [...filteredByPeriod],
     };
-    const updated = [session, ...history].slice(0, 30);
-    setHistory(updated);
-    await persist(HISTORY_KEY, updated);
-    const remaining = movements.filter(m => !isInPeriod(m.date, period));
-    saveMovements(remaining);
+
+    updateActiveList(l => ({
+      history:   [session, ...l.history].slice(0, 30),
+      movements: l.movements.filter(m => !isInPeriod(m.date, l.period)),
+    }));
     closeFinalizarModal();
     showToast('Período guardado en historial ✓');
   };
@@ -510,31 +658,11 @@ function AppInner() {
       id:   Date.now().toString() + Math.random().toString(36).slice(2),
       date: todayStr(),
     }));
-    saveMovements([...cloned, ...movements]);
+    updateActiveList(l => ({ movements: [...cloned, ...l.movements] }));
     const date = reuseSession.date;
     setReuseModalVisible(false);
     setReuseSession(null);
     closeDrawer(() => showToast(`Movimientos del ${date} cargados ✓`));
-  };
-
-  // ─────────────────────────────────────────
-  // MONEDA
-  // ─────────────────────────────────────────
-  const selectCurrency = async (cur) => {
-    setCurrency(cur);
-    await persist(CURRENCY_KEY, cur);
-    setCurrencyModalVisible(false);
-    showToast(`Moneda: ${cur.symbol} ${cur.label} ✓`);
-  };
-
-  // ─────────────────────────────────────────
-  // PERÍODO
-  // ─────────────────────────────────────────
-  const selectPeriod = async (per) => {
-    setPeriod(per);
-    await persist(PERIOD_KEY, per);
-    setPeriodModalVisible(false);
-    showToast(`Período: ${per} ✓`);
   };
 
   // ─────────────────────────────────────────
@@ -571,7 +699,7 @@ function AppInner() {
   .balance-neg { color: #c0392b; font-size: 18px; }
 </style>
 </head><body>
-<h1>💰 Mis Finanzas</h1>
+<h1>💰 ${activeList?.name || 'Mis Finanzas'}</h1>
 <div class="sub">${date} · Período: ${period} · Moneda: ${currency.symbol} ${currency.label}</div>
 <table>
   <thead>
@@ -603,9 +731,9 @@ function AppInner() {
       const available = await Sharing.isAvailableAsync();
       if (available) {
         await Sharing.shareAsync(uri, {
-          mimeType: 'application/pdf',
+          mimeType:    'application/pdf',
           dialogTitle: 'Compartir reporte',
-          UTI: 'com.adobe.pdf',
+          UTI:         'com.adobe.pdf',
         });
       } else {
         showToast('Compartir no disponible en este dispositivo');
@@ -624,12 +752,10 @@ function AppInner() {
     if (!filteredByPeriod.length) { showToast('No hay movimientos para exportar'); return; }
 
     try {
-      const sym = currency.symbol;
-
-      // BOM UTF-8 para que Excel reconozca tildes y caracteres especiales
-      const BOM = '\uFEFF';
+      const sym    = currency.symbol;
+      const BOM    = '\uFEFF';
       const header = 'Descripcion,Tipo,Monto,Moneda,Fecha\n';
-      const rows = filteredByPeriod.map(m =>
+      const rows   = filteredByPeriod.map(m =>
         `"${m.description.replace(/"/g, '""')}","${m.type === 'income' ? 'Ingreso' : 'Gasto'}",${m.amount},"${sym}","${m.date}"`
       ).join('\n');
       const totals =
@@ -637,22 +763,19 @@ function AppInner() {
         `"TOTAL GASTOS","",${totalGasto},"${sym}",""\n` +
         `"BALANCE","",${totalBalance},"${sym}",""`;
 
-      const csv = BOM + header + rows + totals;
-
-      // Escribir el archivo en el directorio de caché del dispositivo
-      const fileName = `mis-finanzas-${period.toLowerCase()}-${Date.now()}.csv`;
-      const fileUri = FileSystem.cacheDirectory + fileName;
+      const csv      = BOM + header + rows + totals;
+      const fileName = `mis-finanzas-${(activeList?.name || 'lista').replace(/\s+/g, '-').toLowerCase()}-${Date.now()}.csv`;
+      const fileUri  = FileSystem.cacheDirectory + fileName;
       await FileSystem.writeAsStringAsync(fileUri, csv, {
         encoding: FileSystem.EncodingType.UTF8,
       });
 
-      // Compartir como archivo real (no como texto)
       const isAvailable = await Sharing.isAvailableAsync();
       if (isAvailable) {
         await Sharing.shareAsync(fileUri, {
-          mimeType: 'text/csv',
+          mimeType:    'text/csv',
           dialogTitle: 'Guardar o compartir Excel',
-          UTI: 'public.comma-separated-values-text',
+          UTI:         'public.comma-separated-values-text',
         });
       } else {
         showToast('Compartir no disponible en este dispositivo');
@@ -668,9 +791,9 @@ function AppInner() {
   // ─────────────────────────────────────────
   const shareList = async () => {
     if (!filteredByPeriod.length) { showToast('No hay movimientos para compartir'); return; }
-    const sym = currency.symbol;
+    const sym  = currency.symbol;
     const text =
-      `💰 *Mis Finanzas — ${period}*\n\n` +
+      `💰 *${activeList?.name || 'Mis Finanzas'} — ${period}*\n\n` +
       filteredByPeriod.map(m =>
         `${m.type === 'income' ? '↑ ' : '↓ '}${m.description} · ${m.type === 'income' ? '+' : '−'} ${fmt(m.amount, sym)} · ${m.date}`
       ).join('\n') +
@@ -703,7 +826,7 @@ function AppInner() {
   // ─────────────────────────────────────────
   const renderHistoryItem = (session) => {
     const isExpanded = expandedHistory === session.id;
-    const sym = session.currency || currency.symbol;
+    const sym        = session.currency || currency.symbol;
     return (
       <View key={session.id} style={s.historyCard}>
         <TouchableOpacity
@@ -755,10 +878,7 @@ function AppInner() {
                 {session.balance >= 0 ? '+' : '−'} {fmt(Math.abs(session.balance), sym)}
               </Text>
             </View>
-            <TouchableOpacity
-              style={s.historyRestoreBtn}
-              onPress={() => restoreFromHistory(session)}
-            >
+            <TouchableOpacity style={s.historyRestoreBtn} onPress={() => restoreFromHistory(session)}>
               <Text style={s.historyRestoreBtnText}>↩ Reutilizar movimientos</Text>
             </TouchableOpacity>
           </View>
@@ -803,9 +923,17 @@ function AppInner() {
               <View style={s.hamburgerLine} />
             </TouchableOpacity>
 
-            <Text style={s.appTitle}>
-              Mis <Text style={s.appTitleLight}>Finanzas</Text> 💰
-            </Text>
+            {/* ── SELECTOR DE LISTA ACTIVA ── */}
+            <TouchableOpacity
+              style={s.listSelector}
+              onPress={() => setListSelectorVisible(true)}
+            >
+              <View style={[s.listDot, { backgroundColor: activeList?.color || C.accent }]} />
+              <Text style={s.listSelectorName} numberOfLines={1}>
+                {activeList?.name || 'Mi presupuesto'}
+              </Text>
+              <Text style={s.listSelectorChevron}>▾</Text>
+            </TouchableOpacity>
 
             <View style={s.headerActions}>
               <TouchableOpacity
@@ -834,6 +962,16 @@ function AppInner() {
               <Text style={s.periodSelectorText}>{period}</Text>
               <Text style={s.periodSelectorChevron}>▾</Text>
             </TouchableOpacity>
+
+            {/* ── Botón configurar presupuesto de esta lista ── */}
+            <TouchableOpacity
+              style={s.btnBudgetConfig}
+              onPress={() => { setBudgetInput(budget > 0 ? String(budget) : ''); setBudgetModalVisible(true); }}
+            >
+              <Text style={s.btnBudgetConfigText}>
+                {budget > 0 ? `💰 ${fmt(budget, currency.symbol)}` : '💰 Presupuesto'}
+              </Text>
+            </TouchableOpacity>
           </View>
 
           {/* ── Barra de presupuesto ── */}
@@ -857,7 +995,7 @@ function AppInner() {
               ]}>
                 {budgetOver
                   ? `⚠ Excedido por ${fmt(Math.abs(budgetRemain), currency.symbol)}`
-                  : `Presupuesto: ${fmt(budgetRemain, currency.symbol)} disponibles`}
+                  : `${fmt(budgetRemain, currency.symbol)} disponibles de ${fmt(budget, currency.symbol)}`}
               </Text>
             </TouchableOpacity>
           )}
@@ -866,15 +1004,11 @@ function AppInner() {
           <View style={s.totalsRow}>
             <View style={[s.totalCard, s.totalCardIncome]}>
               <Text style={s.totalLabel}>Ingreso</Text>
-              <Text style={[s.totalAmount, { color: C.income }]}>
-                {fmt(totalIngreso, currency.symbol)}
-              </Text>
+              <Text style={[s.totalAmount, { color: C.income }]}>{fmt(totalIngreso, currency.symbol)}</Text>
             </View>
             <View style={[s.totalCard, s.totalCardExpense]}>
               <Text style={s.totalLabel}>Gasto</Text>
-              <Text style={[s.totalAmount, { color: C.expense }]}>
-                {fmt(totalGasto, currency.symbol)}
-              </Text>
+              <Text style={[s.totalAmount, { color: C.expense }]}>{fmt(totalGasto, currency.symbol)}</Text>
             </View>
             <View style={[s.totalCard, s.totalCardBalance]}>
               <Text style={s.totalLabel}>Balance</Text>
@@ -1005,6 +1139,11 @@ function AppInner() {
           renderItem={renderItem}
           contentContainerStyle={s.listContent}
           keyboardShouldPersistTaps="handled"
+          onScrollBeginDrag={() => {
+            Keyboard.dismiss();
+            editingRef.current = false;
+            setFormVisible(false);
+          }}
           ListEmptyComponent={
             <View style={s.emptyState}>
               <Text style={s.emptyEmoji}>{searchQuery ? '🔍' : '💸'}</Text>
@@ -1034,7 +1173,243 @@ function AppInner() {
         </TouchableOpacity>
       </View>
 
-      {/* ══ DRAWER ══ */}
+      {/* ══════════════════════════════════════
+          MODAL SELECTOR DE LISTA
+      ══════════════════════════════════════ */}
+      <Modal
+        visible={listSelectorVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setListSelectorVisible(false)}
+      >
+        <TouchableOpacity
+          style={s.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setListSelectorVisible(false)}
+        >
+          <View style={[s.modalSheet, { paddingBottom: Math.max(40, insets.bottom + 20) }]}>
+            <View style={s.sheetHandle} />
+            <Text style={s.sheetTitle}>Mis presupuestos</Text>
+            <Text style={s.sheetSub}>Seleccioná o creá uno nuevo</Text>
+
+            {lists.map(list => (
+              <TouchableOpacity
+                key={list.id}
+                style={[s.listItem, list.id === activeListId && { borderColor: list.color }]}
+                onPress={() => switchList(list.id)}
+              >
+                <View style={[s.listItemDot, { backgroundColor: list.color }]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={s.listItemName}>{list.name}</Text>
+                  <Text style={s.listItemSub}>
+                    {list.currency.symbol} · {list.period}
+                    {list.budget > 0 ? ` · Presupuesto: ${fmt(list.budget, list.currency.symbol)}` : ''}
+                  </Text>
+                </View>
+                <View style={s.listItemActions}>
+                  {list.id === activeListId && (
+                    <Text style={[s.listItemCheck, { color: list.color }]}>✓</Text>
+                  )}
+                  <TouchableOpacity
+                    style={s.listItemEditBtn}
+                    onPress={() => { setListSelectorVisible(false); openEditList(list); }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Text style={s.listItemEditText}>✎</Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+            ))}
+
+            {lists.length < MAX_LISTS && (
+              <TouchableOpacity style={s.btnNewList} onPress={openNewListModal}>
+                <Text style={s.btnNewListText}>+ Nuevo presupuesto</Text>
+              </TouchableOpacity>
+            )}
+            {lists.length >= MAX_LISTS && (
+              <Text style={s.maxListsNote}>Máximo {MAX_LISTS} presupuestos alcanzado</Text>
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ══════════════════════════════════════
+          MODAL NUEVA LISTA
+      ══════════════════════════════════════ */}
+      <Modal
+        visible={newListModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setNewListModal(false)}
+      >
+        <TouchableOpacity
+          style={s.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setNewListModal(false)}
+        >
+          <View style={[s.modalSheet, { paddingBottom: Math.max(40, insets.bottom + 20) }]}
+            onStartShouldSetResponder={() => true}>
+            <View style={s.sheetHandle} />
+            <Text style={s.sheetTitle}>Nuevo presupuesto</Text>
+
+            <Text style={s.fieldLabel}>Nombre</Text>
+            <TextInput
+              style={[s.input, { marginBottom: 16 }]}
+              placeholder="Ej: Salario, Freelance, Hogar..."
+              placeholderTextColor={C.text3}
+              value={newListName}
+              onChangeText={setNewListName}
+              autoFocus
+              returnKeyType="done"
+            />
+
+            <Text style={s.fieldLabel}>Color</Text>
+            <View style={s.colorRow}>
+              {LIST_COLORS.map(color => (
+                <TouchableOpacity
+                  key={color}
+                  style={[s.colorDot, { backgroundColor: color }, newListColor === color && s.colorDotSelected]}
+                  onPress={() => setNewListColor(color)}
+                />
+              ))}
+            </View>
+
+            <Text style={[s.fieldLabel, { marginTop: 16 }]}>Moneda</Text>
+            <View style={s.toggleRow}>
+              {CURRENCIES.map(cur => (
+                <TouchableOpacity
+                  key={cur.code}
+                  style={[s.toggleBtn, newListCurrency.code === cur.code && { borderColor: C.accent, backgroundColor: C.accentGlow }]}
+                  onPress={() => setNewListCurrency(cur)}
+                >
+                  <Text style={[s.toggleBtnText, newListCurrency.code === cur.code && { color: C.accent2 }]}>
+                    {cur.symbol} {cur.code}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={[s.fieldLabel, { marginTop: 16 }]}>Período por defecto</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 20 }}>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {PERIODS.map(per => (
+                  <TouchableOpacity
+                    key={per}
+                    style={[s.periodChip, newListPeriod === per && { borderColor: C.accent, backgroundColor: C.accentGlow }]}
+                    onPress={() => setNewListPeriod(per)}
+                  >
+                    <Text style={[s.periodChipText, newListPeriod === per && { color: C.accent2 }]}>{per}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </ScrollView>
+
+            <TouchableOpacity style={s.btnAdd} onPress={confirmNewList}>
+              <Text style={[s.btnAddText, { color: '#fff' }]}>✓ Crear presupuesto</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ══════════════════════════════════════
+          MODAL EDITAR LISTA
+      ══════════════════════════════════════ */}
+      <Modal
+        visible={editListModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setEditListModal(false)}
+      >
+        <TouchableOpacity
+          style={s.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setEditListModal(false)}
+        >
+          <View style={[s.modalSheet, { paddingBottom: Math.max(40, insets.bottom + 20) }]}
+            onStartShouldSetResponder={() => true}>
+            <View style={s.sheetHandle} />
+            <Text style={s.sheetTitle}>Editar presupuesto</Text>
+
+            <Text style={s.fieldLabel}>Nombre</Text>
+            <TextInput
+              style={[s.input, { marginBottom: 16 }]}
+              placeholder="Nombre del presupuesto"
+              placeholderTextColor={C.text3}
+              value={newListName}
+              onChangeText={setNewListName}
+              autoFocus
+              returnKeyType="done"
+            />
+
+            <Text style={s.fieldLabel}>Color</Text>
+            <View style={[s.colorRow, { marginBottom: 20 }]}>
+              {LIST_COLORS.map(color => (
+                <TouchableOpacity
+                  key={color}
+                  style={[s.colorDot, { backgroundColor: color }, newListColor === color && s.colorDotSelected]}
+                  onPress={() => setNewListColor(color)}
+                />
+              ))}
+            </View>
+
+            <TouchableOpacity style={s.btnAdd} onPress={confirmEditList}>
+              <Text style={[s.btnAddText, { color: '#fff' }]}>✓ Guardar cambios</Text>
+            </TouchableOpacity>
+
+            {lists.length > 1 && (
+              <TouchableOpacity
+                style={[s.btnAdd, { backgroundColor: 'transparent', borderWidth: 1, borderColor: C.expense, marginTop: 10 }]}
+                onPress={() => {
+                  setListToDelete(editingList);
+                  setEditListModal(false);
+                  setDeleteListModal(true);
+                }}
+              >
+                <Text style={[s.btnAddText, { color: C.expense }]}>🗑 Eliminar presupuesto</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ══════════════════════════════════════
+          MODAL ELIMINAR LISTA
+      ══════════════════════════════════════ */}
+      <Modal
+        visible={deleteListModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setDeleteListModal(false)}
+      >
+        <View style={s.finalizarOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setDeleteListModal(false)} activeOpacity={1} />
+          <View style={s.finalizarCard}>
+            <View style={s.finalizarHeader}>
+              <Text style={s.finalizarTitle}>🗑 Eliminar presupuesto</Text>
+            </View>
+            <View style={s.finalizarContent}>
+              <Text style={s.finalizarSub}>
+                ¿Eliminar "{listToDelete?.name}"? Se borrarán todos sus movimientos e historial. Esta acción no se puede deshacer.
+              </Text>
+            </View>
+            <View style={s.finalizarActions}>
+              <TouchableOpacity style={s.finalizarBtnCancel} onPress={() => setDeleteListModal(false)}>
+                <Text style={s.finalizarBtnCancelText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.finalizarBtnConfirm, { backgroundColor: C.expense, borderColor: C.expense }]}
+                onPress={confirmDeleteList}
+              >
+                <Text style={s.finalizarBtnConfirmText}>Eliminar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ══════════════════════════════════════
+          DRAWER
+      ══════════════════════════════════════ */}
       <Modal
         visible={drawerVisible}
         transparent
@@ -1042,50 +1417,54 @@ function AppInner() {
         onRequestClose={() => closeDrawer()}
       >
         <View style={s.drawerOverlay}>
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            onPress={() => closeDrawer()}
-            activeOpacity={1}
-          />
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => closeDrawer()} activeOpacity={1} />
           <Animated.View style={[s.drawerPanel, { transform: [{ translateX: drawerAnim }] }]}>
             <SafeAreaView edges={['top', 'left', 'bottom']} style={s.drawerSafe}>
               <View style={s.drawerHeader}>
                 <Text style={s.drawerTitle}>💰 Mis Finanzas</Text>
-                <TouchableOpacity
-                  onPress={() => closeDrawer()}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
+                <TouchableOpacity onPress={() => closeDrawer()} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                   <Text style={s.drawerClose}>✕</Text>
                 </TouchableOpacity>
               </View>
 
               <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
-                {/* Presupuesto */}
+
+                {/* Gestión de presupuestos */}
                 <View style={s.drawerSection}>
-                  <Text style={s.drawerSectionTitle}>💰 PRESUPUESTO</Text>
-                  <TouchableOpacity
-                    style={s.drawerItem}
-                    onPress={() => {
-                      setBudgetInput(budget > 0 ? String(budget) : '');
-                      setDrawerVisible(false);
-                      drawerAnim.setValue(-DRAWER_WIDTH);
-                      setBudgetModalVisible(true);
-                    }}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={s.drawerItemText}>Configurar presupuesto</Text>
-                      <Text style={s.drawerItemSub}>
-                        {budget > 0 ? `Actual: ${fmt(budget, currency.symbol)}` : 'Sin límite configurado'}
-                      </Text>
-                    </View>
-                    <Text style={s.drawerChevron}>›</Text>
-                  </TouchableOpacity>
+                  <Text style={s.drawerSectionTitle}>📋 MIS PRESUPUESTOS</Text>
+                  {lists.map(list => (
+                    <TouchableOpacity
+                      key={list.id}
+                      style={[s.drawerItem, { marginBottom: 8 }, list.id === activeListId && { borderColor: list.color }]}
+                      onPress={() => { switchList(list.id); closeDrawer(); }}
+                    >
+                      <View style={[s.listDot, { backgroundColor: list.color, marginRight: 10 }]} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.drawerItemText}>{list.name}</Text>
+                        <Text style={s.drawerItemSub}>
+                          {list.currency.symbol} · {list.period}
+                          {list.budget > 0 ? ` · ${fmt(list.budget, list.currency.symbol)}` : ''}
+                        </Text>
+                      </View>
+                      {list.id === activeListId && <Text style={[s.drawerChevron, { color: list.color }]}>✓</Text>}
+                    </TouchableOpacity>
+                  ))}
+                  {lists.length < MAX_LISTS && (
+                    <TouchableOpacity
+                      style={s.drawerNewListBtn}
+                      onPress={() => { closeDrawer(() => { openNewListModal(); }); }}
+                    >
+                      <Text style={s.drawerNewListText}>+ Nuevo presupuesto</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
 
-                {/* Historial */}
+                {/* Historial de la lista activa */}
                 <View style={s.drawerSection}>
                   <View style={s.drawerSectionHeader}>
-                    <Text style={s.drawerSectionTitle}>📋 HISTORIAL DE PERÍODOS</Text>
+                    <Text style={s.drawerSectionTitle}>
+                      📋 HISTORIAL — {activeList?.name?.toUpperCase()}
+                    </Text>
                     {history.length > 0 && (
                       <TouchableOpacity onPress={() => setClearHistoryModal(true)}>
                         <Text style={s.drawerClearHistory}>Borrar todo</Text>
@@ -1127,7 +1506,9 @@ function AppInner() {
               <Text style={s.finalizarTitle}>¿Cerrar período?</Text>
             </View>
             <View style={s.finalizarContent}>
-              <Text style={s.finalizarSub}>Se guardará el balance en tu historial y se limpiarán los movimientos del período actual.</Text>
+              <Text style={s.finalizarSub}>
+                Se guardará el balance de "{activeList?.name}" en el historial y se limpiarán los movimientos del período actual.
+              </Text>
               <View style={s.finalizarTotals}>
                 <View style={s.finalizarTotal}>
                   <Text style={s.finalizarTotalLabel}>Ingreso</Text>
@@ -1167,32 +1548,24 @@ function AppInner() {
         onRequestClose={() => setClearHistoryModal(false)}
       >
         <View style={s.finalizarOverlay}>
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            onPress={() => setClearHistoryModal(false)}
-            activeOpacity={1}
-          />
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setClearHistoryModal(false)} activeOpacity={1} />
           <View style={s.finalizarCard}>
             <View style={s.finalizarHeader}>
               <Text style={s.finalizarTitle}>🗑 Borrar historial</Text>
             </View>
             <View style={s.finalizarContent}>
               <Text style={s.finalizarSub}>
-                ¿Borrar todo el historial de períodos? Esta acción no se puede deshacer.
+                ¿Borrar todo el historial de "{activeList?.name}"? Esta acción no se puede deshacer.
               </Text>
             </View>
             <View style={s.finalizarActions}>
-              <TouchableOpacity
-                style={s.finalizarBtnCancel}
-                onPress={() => setClearHistoryModal(false)}
-              >
+              <TouchableOpacity style={s.finalizarBtnCancel} onPress={() => setClearHistoryModal(false)}>
                 <Text style={s.finalizarBtnCancelText}>Cancelar</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[s.finalizarBtnConfirm, { backgroundColor: C.expense, borderColor: C.expense }]}
-                onPress={async () => {
-                  setHistory([]);
-                  await persist(HISTORY_KEY, []);
+                onPress={() => {
+                  updateActiveList(() => ({ history: [] }));
                   setClearHistoryModal(false);
                   showToast('Historial borrado 🗑');
                 }}
@@ -1212,18 +1585,14 @@ function AppInner() {
         onRequestClose={() => setClearListModal(false)}
       >
         <View style={s.finalizarOverlay}>
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            onPress={() => setClearListModal(false)}
-            activeOpacity={1}
-          />
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setClearListModal(false)} activeOpacity={1} />
           <View style={s.finalizarCard}>
             <View style={s.finalizarHeader}>
               <Text style={s.finalizarTitle}>🗑 Limpiar movimientos</Text>
             </View>
             <View style={s.finalizarContent}>
               <Text style={s.finalizarSub}>
-                ¿Borrar TODOS los movimientos registrados? Esta acción no se puede deshacer.
+                ¿Borrar TODOS los movimientos de "{activeList?.name}"? Esta acción no se puede deshacer.
               </Text>
               <View style={s.finalizarTotals}>
                 <View style={s.finalizarTotal}>
@@ -1240,16 +1609,13 @@ function AppInner() {
               </View>
             </View>
             <View style={s.finalizarActions}>
-              <TouchableOpacity
-                style={s.finalizarBtnCancel}
-                onPress={() => setClearListModal(false)}
-              >
+              <TouchableOpacity style={s.finalizarBtnCancel} onPress={() => setClearListModal(false)}>
                 <Text style={s.finalizarBtnCancelText}>Cancelar</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[s.finalizarBtnConfirm, { backgroundColor: C.expense, borderColor: C.expense }]}
                 onPress={() => {
-                  saveMovements([]);
+                  updateActiveList(() => ({ movements: [] }));
                   setClearListModal(false);
                   showToast('Movimientos eliminados 🗑');
                 }}
@@ -1269,11 +1635,7 @@ function AppInner() {
         onRequestClose={() => { setReuseModalVisible(false); setReuseSession(null); }}
       >
         <View style={s.finalizarOverlay}>
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            onPress={() => { setReuseModalVisible(false); setReuseSession(null); }}
-            activeOpacity={1}
-          />
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => { setReuseModalVisible(false); setReuseSession(null); }} activeOpacity={1} />
           <View style={s.finalizarCard}>
             <View style={s.finalizarHeader}>
               <Text style={s.finalizarTitle}>↩ Reutilizar período</Text>
@@ -1301,10 +1663,7 @@ function AppInner() {
               )}
             </View>
             <View style={s.finalizarActions}>
-              <TouchableOpacity
-                style={s.finalizarBtnCancel}
-                onPress={() => { setReuseModalVisible(false); setReuseSession(null); }}
-              >
+              <TouchableOpacity style={s.finalizarBtnCancel} onPress={() => { setReuseModalVisible(false); setReuseSession(null); }}>
                 <Text style={s.finalizarBtnCancelText}>Cancelar</Text>
               </TouchableOpacity>
               <TouchableOpacity style={s.finalizarBtnConfirm} onPress={confirmRestoreFromHistory}>
@@ -1322,11 +1681,7 @@ function AppInner() {
         animationType="slide"
         onRequestClose={() => setPeriodModalVisible(false)}
       >
-        <TouchableOpacity
-          style={s.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setPeriodModalVisible(false)}
-        >
+        <TouchableOpacity style={s.modalOverlay} activeOpacity={1} onPress={() => setPeriodModalVisible(false)}>
           <View style={[s.modalSheet, { paddingBottom: Math.max(40, insets.bottom + 20) }]}>
             <View style={s.sheetHandle} />
             <Text style={s.sheetTitle}>Seleccionar período</Text>
@@ -1343,11 +1698,11 @@ function AppInner() {
                 <View style={{ flex: 1 }}>
                   <Text style={s.pdfOptionTitle}>{p}</Text>
                   <Text style={s.pdfOptionSub}>
-                    {p === 'Diario'    ? 'Solo movimientos de hoy'
-                    : p === 'Semanal'  ? 'Esta semana (lunes a domingo)'
-                    : p === 'Bisemanal'? 'Últimas 2 semanas'
-                    : p === 'Quincenal'? '1–15 o 16–fin de mes'
-                    :                   'Este mes calendario'}
+                    {p === 'Diario'     ? 'Solo movimientos de hoy'
+                    : p === 'Semanal'   ? 'Esta semana (lunes a domingo)'
+                    : p === 'Bisemanal' ? 'Últimas 2 semanas'
+                    : p === 'Quincenal' ? '1–15 o 16–fin de mes'
+                    :                    'Este mes calendario'}
                   </Text>
                 </View>
                 {period === p && <Text style={{ color: C.accent, fontSize: 20 }}>✓</Text>}
@@ -1364,15 +1719,11 @@ function AppInner() {
         animationType="slide"
         onRequestClose={() => setCurrencyModalVisible(false)}
       >
-        <TouchableOpacity
-          style={s.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setCurrencyModalVisible(false)}
-        >
+        <TouchableOpacity style={s.modalOverlay} activeOpacity={1} onPress={() => setCurrencyModalVisible(false)}>
           <View style={[s.modalSheet, { paddingBottom: Math.max(40, insets.bottom + 20) }]}>
             <View style={s.sheetHandle} />
-            <Text style={s.sheetTitle}>Seleccionar moneda</Text>
-            <Text style={s.sheetSub}>Cambia la moneda de todos los totales</Text>
+            <Text style={s.sheetTitle}>Moneda de "{activeList?.name}"</Text>
+            <Text style={s.sheetSub}>Solo aplica a este presupuesto</Text>
             {CURRENCIES.map(cur => (
               <TouchableOpacity
                 key={cur.code}
@@ -1406,7 +1757,7 @@ function AppInner() {
           onPress={() => setBudgetModalVisible(false)}
         >
           <View style={s.budgetCard} onStartShouldSetResponder={() => true}>
-            <Text style={s.budgetCardTitle}>💰 Presupuesto límite</Text>
+            <Text style={s.budgetCardTitle}>💰 Presupuesto — {activeList?.name}</Text>
             <Text style={s.budgetCardSub}>La app te avisará cuando estés cerca de superarlo</Text>
             <TextInput
               style={[s.input, { marginBottom: 20, fontSize: 22 }]}
@@ -1426,8 +1777,7 @@ function AppInner() {
                 <TouchableOpacity
                   style={s.budgetBtnDeactivate}
                   onPress={() => {
-                    setBudget(0);
-                    persist(BUDGET_KEY, 0);
+                    updateActiveList(() => ({ budget: 0 }));
                     setBudgetModalVisible(false);
                     showToast('Presupuesto desactivado');
                   }}
@@ -1435,10 +1785,7 @@ function AppInner() {
                   <Text style={s.budgetBtnDeactivateText}>🚫 Desactivar</Text>
                 </TouchableOpacity>
               ) : (
-                <TouchableOpacity
-                  style={s.budgetBtnCancel}
-                  onPress={() => setBudgetModalVisible(false)}
-                >
+                <TouchableOpacity style={s.budgetBtnCancel} onPress={() => setBudgetModalVisible(false)}>
                   <Text style={s.budgetBtnCancelText}>Cancelar</Text>
                 </TouchableOpacity>
               )}
@@ -1454,15 +1801,11 @@ function AppInner() {
         animationType="slide"
         onRequestClose={() => setPdfModalVisible(false)}
       >
-        <TouchableOpacity
-          style={s.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setPdfModalVisible(false)}
-        >
+        <TouchableOpacity style={s.modalOverlay} activeOpacity={1} onPress={() => setPdfModalVisible(false)}>
           <View style={[s.modalSheet, { paddingBottom: Math.max(40, insets.bottom + 20) }]}>
             <View style={s.sheetHandle} />
             <Text style={s.sheetTitle}>Exportar reporte</Text>
-            <Text style={s.sheetSub}>Período: {period} · {filteredByPeriod.length} movimientos</Text>
+            <Text style={s.sheetSub}>{activeList?.name} · {period} · {filteredByPeriod.length} movimientos</Text>
             <TouchableOpacity style={s.pdfOption} onPress={downloadPDF}>
               <Text style={s.pdfOptionIcon}>📄</Text>
               <View>
@@ -1477,10 +1820,7 @@ function AppInner() {
                 <Text style={s.pdfOptionSub}>Compatible con Excel y Google Sheets</Text>
               </View>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={s.pdfOption}
-              onPress={() => { setPdfModalVisible(false); shareList(); }}
-            >
+            <TouchableOpacity style={s.pdfOption} onPress={() => { setPdfModalVisible(false); shareList(); }}>
               <Text style={s.pdfOptionIcon}>↗</Text>
               <View>
                 <Text style={s.pdfOptionTitle}>Compartir como texto</Text>
@@ -1502,14 +1842,14 @@ const s = StyleSheet.create({
   flex:     { flex: 1, backgroundColor: C.bg },
 
   // ── SPLASH ──
-  splashContainer:  { flex: 1, backgroundColor: C.bg, justifyContent: 'space-between', alignItems: 'center', paddingVertical: 60 },
-  splashContent:    { flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' },
-  splashEmoji:      { fontSize: 70, marginBottom: 15, textAlign: 'center', width: '100%' },
-  splashTitle:      { fontSize: 32, fontWeight: '800', color: C.accent2, letterSpacing: 1, marginBottom: 8 },
-  splashSubtitle:   { fontSize: 14, color: C.text3, fontWeight: '400' },
-  splashFooter:     { alignItems: 'center', gap: 4 },
-  splashVersion:    { fontSize: 12, color: C.surface3, fontWeight: '600' },
-  splashCredits:    { fontSize: 13, color: C.text3, fontStyle: 'italic', letterSpacing: 0.5 },
+  splashContainer: { flex: 1, backgroundColor: C.bg, justifyContent: 'space-between', alignItems: 'center', paddingVertical: 60 },
+  splashContent:   { flex: 1, justifyContent: 'center', alignItems: 'center', width: '100%' },
+  splashEmoji:     { fontSize: 70, marginBottom: 15, textAlign: 'center', width: '100%' },
+  splashTitle:     { fontSize: 32, fontWeight: '800', color: C.accent2, letterSpacing: 1, marginBottom: 8 },
+  splashSubtitle:  { fontSize: 14, color: C.text3, fontWeight: '400' },
+  splashFooter:    { alignItems: 'center', gap: 4 },
+  splashVersion:   { fontSize: 12, color: C.surface3, fontWeight: '600' },
+  splashCredits:   { fontSize: 13, color: C.text3, fontStyle: 'italic', letterSpacing: 0.5 },
 
   // ── HEADER ──
   header: {
@@ -1518,8 +1858,6 @@ const s = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: C.border, gap: 10,
   },
   headerTop:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  appTitle:      { fontSize: 22, fontWeight: '700', color: C.accent2, letterSpacing: -0.5 },
-  appTitleLight: { fontWeight: '300', fontStyle: 'italic', color: C.text2 },
   headerActions: { flexDirection: 'row', gap: 8 },
   btnIcon: {
     width: 38, height: 38, borderRadius: 19,
@@ -1537,6 +1875,17 @@ const s = StyleSheet.create({
   },
   hamburgerLine: { width: 16, height: 2, borderRadius: 1, backgroundColor: C.text2 },
 
+  // ── SELECTOR DE LISTA ──
+  listSelector: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: 10, paddingVertical: 6, paddingHorizontal: 12,
+    borderRadius: 20, borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.surface2,
+  },
+  listDot:           { width: 10, height: 10, borderRadius: 5 },
+  listSelectorName:  { flex: 1, fontSize: 15, fontWeight: '700', color: C.text },
+  listSelectorChevron: { fontSize: 12, color: C.text3 },
+
   // ── MONEDA ──
   btnCurrency: {
     width: 38, height: 38, borderRadius: 19,
@@ -1546,16 +1895,23 @@ const s = StyleSheet.create({
   },
   btnCurrencyText: { fontSize: 15, fontWeight: '700', color: C.accent2 },
 
-  // ── PERÍODO ──
-  periodSelectorRow: { flexDirection: 'row' },
+  // ── PERÍODO + BOTÓN PRESUPUESTO ──
+  periodSelectorRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   periodSelectorBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingVertical: 7, paddingHorizontal: 14,
     borderRadius: 20, borderWidth: 1, borderColor: C.accent,
-    backgroundColor: C.accentGlow, alignSelf: 'flex-start',
+    backgroundColor: C.accentGlow,
   },
   periodSelectorText:    { fontSize: 13, color: C.accent2, fontWeight: '600' },
   periodSelectorChevron: { fontSize: 12, color: C.accent2 },
+  btnBudgetConfig: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 7, paddingHorizontal: 14,
+    borderRadius: 20, borderWidth: 1, borderColor: C.border,
+    backgroundColor: C.surface2, flex: 1,
+  },
+  btnBudgetConfigText: { fontSize: 12, color: C.text2, fontWeight: '500', flex: 1, textAlign: 'center' },
 
   // ── PRESUPUESTO ──
   budgetBar:   { gap: 4 },
@@ -1595,7 +1951,7 @@ const s = StyleSheet.create({
     borderRadius: 10, color: C.text,
     fontSize: 15, paddingVertical: 11, paddingHorizontal: 14,
   },
-  btnAdd:     { borderRadius: 10, paddingVertical: 13, alignItems: 'center', justifyContent: 'center' },
+  btnAdd:     { borderRadius: 10, paddingVertical: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: C.accent },
   btnAddText: { color: '#fff', fontSize: 15, fontWeight: '700', letterSpacing: 0.3 },
 
   // ── TOGGLE TIPO ──
@@ -1668,9 +2024,9 @@ const s = StyleSheet.create({
   },
   amountInputIncome:  { borderColor: 'rgba(79,207,138,0.35)' },
   amountInputExpense: { borderColor: 'rgba(224,112,112,0.35)' },
-  itemDate:        { fontSize: 12, color: C.text3 },
-  deleteBtn:       { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
-  deleteBtnText:   { fontSize: 18 },
+  itemDate:     { fontSize: 12, color: C.text3 },
+  deleteBtn:    { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  deleteBtnText:{ fontSize: 18 },
 
   // ── BOTTOM BAR ──
   bottomBar: {
@@ -1714,7 +2070,7 @@ const s = StyleSheet.create({
   drawerClose:         { fontSize: 20, color: C.text3 },
   drawerSection:       { paddingHorizontal: 16, paddingTop: 20, paddingBottom: 8 },
   drawerSectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
-  drawerSectionTitle:  { fontSize: 11, color: C.text3, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
+  drawerSectionTitle:  { fontSize: 11, color: C.text3, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase', marginBottom: 12 },
   drawerClearHistory:  { fontSize: 12, color: C.expense },
   drawerItem: {
     flexDirection: 'row', alignItems: 'center',
@@ -1725,6 +2081,49 @@ const s = StyleSheet.create({
   drawerItemText: { fontSize: 15, fontWeight: '600', color: C.text },
   drawerItemSub:  { fontSize: 12, color: C.text3, marginTop: 2 },
   drawerChevron:  { fontSize: 20, color: C.text3 },
+  drawerNewListBtn: {
+    marginTop: 8, paddingVertical: 12, borderRadius: 12,
+    borderWidth: 1, borderColor: C.accent, borderStyle: 'dashed',
+    alignItems: 'center', backgroundColor: C.accentGlow,
+  },
+  drawerNewListText: { color: C.accent, fontSize: 14, fontWeight: '600' },
+
+  // ── SELECTOR DE LISTAS (modal sheet) ──
+  listItem: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 14, paddingHorizontal: 14,
+    backgroundColor: C.surface2, borderRadius: 12,
+    borderWidth: 1, borderColor: C.border, marginBottom: 10,
+  },
+  listItemDot:     { width: 12, height: 12, borderRadius: 6, marginRight: 12 },
+  listItemName:    { fontSize: 15, fontWeight: '600', color: C.text },
+  listItemSub:     { fontSize: 12, color: C.text3, marginTop: 2 },
+  listItemActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  listItemCheck:   { fontSize: 18, fontWeight: '700' },
+  listItemEditBtn: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center' },
+  listItemEditText:{ fontSize: 16, color: C.text3 },
+  btnNewList: {
+    paddingVertical: 14, borderRadius: 12,
+    borderWidth: 1, borderColor: C.accent, borderStyle: 'dashed',
+    alignItems: 'center', backgroundColor: C.accentGlow, marginTop: 4,
+  },
+  btnNewListText: { color: C.accent, fontSize: 15, fontWeight: '600' },
+  maxListsNote:   { fontSize: 12, color: C.text3, textAlign: 'center', marginTop: 8 },
+
+  // ── NUEVA LISTA — color picker ──
+  colorRow: { flexDirection: 'row', gap: 12, marginBottom: 4 },
+  colorDot: {
+    width: 36, height: 36, borderRadius: 18,
+    borderWidth: 2, borderColor: 'transparent',
+  },
+  colorDotSelected: { borderColor: '#fff', transform: [{ scale: 1.15 }] },
+
+  // ── PERIOD CHIPS ──
+  periodChip: {
+    paddingVertical: 8, paddingHorizontal: 16, borderRadius: 20,
+    borderWidth: 1, borderColor: C.border, backgroundColor: C.surface2,
+  },
+  periodChipText: { fontSize: 13, color: C.text3, fontWeight: '500' },
 
   // ── HISTORIAL ──
   historyEmpty:       { alignItems: 'center', paddingVertical: 24 },
@@ -1834,7 +2233,7 @@ const s = StyleSheet.create({
     flex: 1, backgroundColor: C.accent, borderRadius: 12,
     paddingVertical: 14, alignItems: 'center', justifyContent: 'center',
   },
-  budgetBtnSaveText: { color: C.bg, fontSize: 15, fontWeight: '700', letterSpacing: 0.3 },
+  budgetBtnSaveText:       { color: C.bg, fontSize: 15, fontWeight: '700', letterSpacing: 0.3 },
   budgetBtnDeactivate: {
     flex: 1, borderRadius: 12, borderWidth: 1,
     borderColor: 'rgba(224,112,112,0.45)',
