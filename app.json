@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Mis Finanzas",
+    "slug": "mis-finanzas",
+    "version": "1.2.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0d1520"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0d1520"
+      },
+      "package": "com.alva.misfinanzas",
+      "versionCode": 1,
+      "permissions": []
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.alva.misfinanzas"
+    },
+    "plugins": [
+      "expo-print",
+      "expo-sharing",
+      "expo-file-system"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "REEMPLAZA-CON-TU-PROJECT-ID"
+      }
+    }
+  }
+}
