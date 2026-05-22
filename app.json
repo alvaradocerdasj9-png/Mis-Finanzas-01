@@ -24,13 +24,10 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.alva.misfinanzas"
     },
-    "plugins": [
-      "expo-print",
-      "expo-sharing"
-    ],
+    "plugins": ["expo-print", "expo-sharing"],
     "extra": {
       "eas": {
-        "projectId": "REEMPLAZA-CON-TU-PROJECT-ID"
+        "projectId": "47e34628-f3e9-4a9a-a01a-d05d81cce4fa"
       }
     }
   }
