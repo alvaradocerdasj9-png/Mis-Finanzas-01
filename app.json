@@ -26,8 +26,7 @@
     },
     "plugins": [
       "expo-print",
-      "expo-sharing",
-      "expo-file-system"
+      "expo-sharing"
     ],
     "extra": {
       "eas": {
