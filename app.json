@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Mis Finanzas",
-    "slug": "mis-finanzas",
+    "slug": "mis-finanzas-01",
     "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -24,7 +24,6 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.alva.misfinanzas"
     },
-    "plugins": ["expo-print", "expo-sharing"],
     "extra": {
       "eas": {
         "projectId": "47e34628-f3e9-4a9a-a01a-d05d81cce4fa"
