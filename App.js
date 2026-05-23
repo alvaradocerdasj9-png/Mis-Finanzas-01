@@ -907,7 +907,7 @@ function AppInner() {
 
       <KeyboardAvoidingView
         style={s.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
       >
         {/* ══ HEADER ══ */}
@@ -1137,7 +1137,7 @@ function AppInner() {
           data={filteredDisplay}
           keyExtractor={item => item.id}
           renderItem={renderItem}
-          contentContainerStyle={s.listContent}
+          contentContainerStyle={[s.listContent, { paddingBottom: 80 }]}
           keyboardShouldPersistTaps="handled"
           onScrollBeginDrag={() => {
             Keyboard.dismiss();
@@ -2031,6 +2031,7 @@ const s = StyleSheet.create({
   // ── BOTTOM BAR ──
   bottomBar: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
+    zIndex: 100,
     backgroundColor: C.surface,
     borderTopWidth: 1, borderTopColor: C.border,
     paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12,
