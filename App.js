@@ -399,8 +399,6 @@ function AppInner() {
     return () => sub.remove();
   }, []);
 
-
-
   // ─────────────────────────────────────────
   // TOAST
   // ─────────────────────────────────────────
@@ -893,7 +891,7 @@ function AppInner() {
   // RENDER PRINCIPAL
   // ─────────────────────────────────────────
   return (
-    <SafeAreaView style={s.safeArea} edges={['top', 'left', 'right', 'bottom']}>
+    <SafeAreaView style={s.safeArea} edges={['top', 'left', 'right']}>
       <StatusBar barStyle="light-content" backgroundColor={C.surface} />
 
       {/* ── TOAST ── */}
