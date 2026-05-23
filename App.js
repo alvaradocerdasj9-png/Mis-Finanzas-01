@@ -390,14 +390,14 @@ function AppInner() {
     })();
   }, []);
 
-  // ── Teclado oculto → mostrar formulario ──
+  // ── Teclado: ocultar form al abrir, mostrar al cerrar ──
   useEffect(() => {
-    const sub = Keyboard.addListener('keyboardDidHide', () => {
-      editingRef.current = false;
-      setFormVisible(true);
-    });
-    return () => sub.remove();
+    const show = Keyboard.addListener('keyboardDidShow', () => { setFormVisible(false); });
+    const hide = Keyboard.addListener('keyboardDidHide', () => { editingRef.current = false; setFormVisible(true); });
+    return () => { show.remove(); hide.remove(); };
   }, []);
+
+
 
   // ─────────────────────────────────────────
   // TOAST
@@ -907,7 +907,7 @@ function AppInner() {
 
       <KeyboardAvoidingView
         style={s.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={0}
       >
         {/* ══ HEADER ══ */}
@@ -1137,7 +1137,7 @@ function AppInner() {
           data={filteredDisplay}
           keyExtractor={item => item.id}
           renderItem={renderItem}
-          contentContainerStyle={[s.listContent, { paddingBottom: 80 }]}
+          contentContainerStyle={s.listContent}
           keyboardShouldPersistTaps="handled"
           onScrollBeginDrag={() => {
             Keyboard.dismiss();
@@ -2030,8 +2030,6 @@ const s = StyleSheet.create({
 
   // ── BOTTOM BAR ──
   bottomBar: {
-    position: 'absolute', bottom: 0, left: 0, right: 0,
-    zIndex: 100,
     backgroundColor: C.surface,
     borderTopWidth: 1, borderTopColor: C.border,
     paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12,
