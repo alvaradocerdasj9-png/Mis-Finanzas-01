@@ -2030,6 +2030,7 @@ const s = StyleSheet.create({
 
   // ── BOTTOM BAR ──
   bottomBar: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
     backgroundColor: C.surface,
     borderTopWidth: 1, borderTopColor: C.border,
     paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12,
