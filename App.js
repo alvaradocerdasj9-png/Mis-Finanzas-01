@@ -390,11 +390,13 @@ function AppInner() {
     })();
   }, []);
 
-  // ── Teclado: ocultar form al abrir, mostrar al cerrar ──
+  // ── Teclado oculto → mostrar formulario ──
   useEffect(() => {
-    const show = Keyboard.addListener('keyboardDidShow', () => { setFormVisible(false); });
-    const hide = Keyboard.addListener('keyboardDidHide', () => { editingRef.current = false; setFormVisible(true); });
-    return () => { show.remove(); hide.remove(); };
+    const sub = Keyboard.addListener('keyboardDidHide', () => {
+      editingRef.current = false;
+      setFormVisible(true);
+    });
+    return () => sub.remove();
   }, []);
 
 
