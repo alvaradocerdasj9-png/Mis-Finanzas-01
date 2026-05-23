@@ -18,7 +18,8 @@
       },
       "package": "com.alva.misfinanzas",
       "versionCode": 1,
-      "permissions": []
+      "permissions": [],
+      "edgeToEdgeEnabled": true
     },
     "ios": {
       "supportsTablet": false,
