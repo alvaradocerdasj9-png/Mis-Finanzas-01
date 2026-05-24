@@ -5,18 +5,15 @@
   "build": {
     "preview": {
       "android": {
-        "buildType": "apk",
-        "cache": {
-          "disabled": true
-        }
+        "buildType": "apk"
       }
     },
     "production": {
       "android": {
-        "buildType": "apk",
-        "cache": {
-          "disabled": true
-        }
+        "buildType": "apk"
+      },
+      "ios": {
+        "resourceClass": "m-medium"
       }
     }
   },
