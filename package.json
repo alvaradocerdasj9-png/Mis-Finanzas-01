@@ -5,7 +5,7 @@
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
-    "eas-build-pre-install": "npm install --package-lock-only"
+    "eas-build-pre-install": "npm install"
   },
   "dependencies": {
     "expo": "~54.0.33",
