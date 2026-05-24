@@ -11,6 +11,8 @@
  * ✅ Migración automática desde v1.2 (datos existentes → "Mi presupuesto")
  * ✅ Botón "Configurar presupuesto" dentro de cada lista
  * ✅ Historial separado por lista
+ *
+ * FIX: bottomBar fijo — el teclado ya no mueve los botones PDF/Cerrar período/Compartir
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -888,6 +890,11 @@ function AppInner() {
   };
 
   // ─────────────────────────────────────────
+  // ALTURA DE LA BARRA INFERIOR (para padding del FlatList)
+  // ─────────────────────────────────────────
+  const BOTTOM_BAR_HEIGHT = 56 + Math.max(12, insets.bottom);
+
+  // ─────────────────────────────────────────
   // RENDER PRINCIPAL
   // ─────────────────────────────────────────
   return (
@@ -1132,12 +1139,13 @@ function AppInner() {
         </View>
 
         {/* ══ LISTA ══ */}
+        {/* paddingBottom extra para que el último ítem no quede tapado por el bottomBar fijo */}
         <FlatList
           style={s.list}
           data={filteredDisplay}
           keyExtractor={item => item.id}
           renderItem={renderItem}
-          contentContainerStyle={s.listContent}
+          contentContainerStyle={[s.listContent, { paddingBottom: BOTTOM_BAR_HEIGHT }]}
           keyboardShouldPersistTaps="handled"
           onScrollBeginDrag={() => {
             Keyboard.dismiss();
@@ -1160,8 +1168,14 @@ function AppInner() {
         />
       </KeyboardAvoidingView>
 
-      {/* ══ BOTTOM BAR ══ */}
-      <View style={s.bottomBar}>
+      {/* ══ BOTTOM BAR — posición absoluta para que el teclado no lo mueva ══ */}
+      <View style={[s.bottomBar, {
+        position:     'absolute',
+        bottom:       0,
+        left:         0,
+        right:        0,
+        paddingBottom: Math.max(12, insets.bottom),
+      }]}>
         <TouchableOpacity style={s.btnBottom} onPress={() => setPdfModalVisible(true)}>
           <Text style={s.btnBottomText}>📄 PDF</Text>
         </TouchableOpacity>
@@ -2029,10 +2043,11 @@ const s = StyleSheet.create({
   deleteBtnText:{ fontSize: 18 },
 
   // ── BOTTOM BAR ──
+  // position/bottom/left/right/paddingBottom se aplican inline con insets
   bottomBar: {
     backgroundColor: C.surface,
     borderTopWidth: 1, borderTopColor: C.border,
-    paddingHorizontal: 16, paddingTop: 12, paddingBottom: 12,
+    paddingHorizontal: 16, paddingTop: 12,
     flexDirection: 'row', gap: 8,
   },
   btnBottom: {
